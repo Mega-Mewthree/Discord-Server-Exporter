@@ -195,7 +195,7 @@ async function logChannel(channel) {
   } while (nextID !== null);
   console.log();
   console.log(`${colors.success("[SUCCESS]")} Finished logging the channel #${channel.name}.`);
-  setImmediate(prompt.selectLogging);
+  setImmediate(prompts.selectLogging);
 }
 
 async function logNextMessages(channel, id, counter) {

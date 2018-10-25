@@ -28,7 +28,17 @@ const messageSchema = new mongoose.Schema({
     }
   }
 }, {strict: false});
+const roleSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    index: {
+      unique: true,
+      dropDups: true
+    }
+  }
+}, {strict: false});
 let Message = mongoose.model("messages", messageSchema);
+let Role = mongoose.model("roles", roleSchema);
 
 const bot = new Discord.Client({
   disabledEvents: [
@@ -60,6 +70,7 @@ const prompts = {
       if (db) {
         db = db.useDb(result.databaseName);
         Message = db.model("messages", messageSchema);
+        Role = db.model("roles", roleSchema);
         console.log(`${colors.success("[SUCCESS]")} Connected to database.`);
         if (!selectedGuild) {
           setImmediate(prompts.selectServer);
@@ -113,7 +124,7 @@ const prompts = {
     prompt.get({
       properties: {
         option: {
-          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [8]: Change database\n  [9]: Change server\nChoose logging option`)
+          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [2]: Log all roles in server\n  [8]: Change database\n  [9]: Change server\n  [0]: Exit\nChoose an option`)
         }
       }
     }, (err, result) => {
@@ -126,12 +137,20 @@ const prompts = {
           setImmediate(startLogging);
           break;
         }
+        case "2": {
+          setImmediate(logRoles);
+          break;
+        }
         case "8": {
           setImmediate(prompts.selectDatabase);
           break;
         }
         case "9": {
           setImmediate(prompts.selectServer);
+          break;
+        }
+        case "0": {
+          process.exit();
           break;
         }
         default: {
@@ -211,6 +230,34 @@ async function logNextMessages(channel, id, counter) {
   } catch (e) {
     return null;
   }
+}
+
+async function logRoles() {
+  console.log(`${colors.info("[INFO]")} Starting to log roles for server "${selectedGuild.name}"...`);
+  const roles = selectedGuild.roles.array();
+  const bulk = Role.collection.initializeUnorderedBulkOp();
+  for (let i = 0, len = roles.length, role; i < len; i++) {
+    role = convertRoleToObject(roles[i]);
+    bulk.find({
+      id: role.id
+    }).upsert().updateOne({
+      $set: role
+    });
+  }
+  console.log(`${colors.info("[INFO]")} Writing roles for server "${selectedGuild.name}"...`);
+  try {
+    await new Promise((resolve, reject) => {
+      bulk.execute((err, result) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging ${roles.length} roles for server "${selectedGuild.name}".`);
+  setImmediate(prompts.selectLogging);
 }
 
 function convertMessageToObject(msg) {
@@ -296,6 +343,19 @@ function convertMessageToObject(msg) {
     pinned: msg.pinned,
     webhookID: msg.webhookID,
     type: msg.type
+  };
+}
+
+function convertRoleToObject(role) {
+  return {
+    id: role.id,
+    name: role.name,
+    color: role.color,
+    hoist: role.hoist,
+    position: role.position,
+    permissions: role.permissions,
+    managed: role.managed,
+    mentionable: role.mentionable
   };
 }
 

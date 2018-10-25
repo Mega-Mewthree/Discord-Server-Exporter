@@ -150,6 +150,7 @@ async function startLogging() {
     await logChannel(textChannels[i]);
   }
   console.log(`${colors.success("[SUCCESS]")} Finished logging the server "${selectedGuild.name}".`);
+  setImmediate(prompts.selectLogging);
 }
 
 async function logChannel(channel) {
@@ -195,7 +196,6 @@ async function logChannel(channel) {
   } while (nextID !== null);
   console.log();
   console.log(`${colors.success("[SUCCESS]")} Finished logging the channel #${channel.name}.`);
-  setImmediate(prompts.selectLogging);
 }
 
 async function logNextMessages(channel, id, counter) {

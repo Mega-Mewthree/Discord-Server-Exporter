@@ -6,12 +6,13 @@ const readline = require("readline");
 
 const config = require("../config.json");
 
+process.noDeprecation = true;
+
 colors.setTheme({
   verbose: "cyan",
   prompt: "gray",
-  info: "blue",
+  info: "cyan",
   data: "gray",
-  help: "cyan",
   warn: "yellow",
   debug: "blue",
   error: "red",
@@ -27,7 +28,7 @@ const messageSchema = new mongoose.Schema({
     }
   }
 }, {strict: false});
-const Message = mongoose.model("messages", messageSchema);
+let Message = mongoose.model("messages", messageSchema);
 
 const bot = new Discord.Client({
   disabledEvents: [
@@ -39,34 +40,53 @@ prompt.message = "";
 
 prompt.start();
 
-prompt.get({
-  properties: {
-    databaseName: {
-      description: colors.prompt("Name of MongoDB database to use")
-    }
-  }
-}, (err, result) => {
-  if (err) {
-    if (err.message === "canceled") process.exit();
-    throw err;
-  }
-  console.info(`${colors.info("[INFO]")}: Connecting to database...`);
-  mongoose.connect(`mongodb://localhost/${result.databaseName}`, {
-    useNewUrlParser: true
-  });
-  const db = mongoose.connection;
-  db.on("error", err => {
-    console.error(`${colors.error("[ERROR]")}: Database connection error.`);
-    process.exit();
-  });
-  db.on("open", () => {
-    console.log(`${colors.success("[SUCCESS]")}: Connected to database.`);
-    console.log(`${colors.info("[INFO]")}: Starting Discord bot...`);
-    bot.login(config.token);
-  });
-});
+let db = null;
+let selectedGuild = null;
 
 const prompts = {
+  selectDatabase() {
+    prompt.get({
+      properties: {
+        databaseName: {
+          description: colors.prompt("Name of MongoDB database to use")
+        }
+      }
+    }, (err, result) => {
+      if (err) {
+        if (err.message === "canceled") process.exit();
+        throw err;
+      }
+      console.info(`${colors.info("[INFO]")} Connecting to database...`);
+      if (db) {
+        db = db.useDb(result.databaseName);
+        Message = db.model("messages", messageSchema);
+        console.log(`${colors.success("[SUCCESS]")} Connected to database.`);
+        if (!selectedGuild) {
+          setImmediate(prompts.selectServer);
+        } else {
+          setImmediate(prompts.selectLogging);
+        }
+        return;
+      } else {
+        mongoose.connect(`mongodb://localhost/${result.databaseName}`, {
+          useNewUrlParser: true
+        });
+        db = mongoose.connection;
+      }
+      db.once("error", err => {
+        console.error(`${colors.error("[ERROR]")} Database connection error.`);
+        process.exit();
+      });
+      db.once("connected", () => {
+        console.log(`${colors.success("[SUCCESS]")} Connected to database.`);
+        if (!selectedGuild) {
+          setImmediate(prompts.selectServer);
+        } else {
+          setImmediate(prompts.selectLogging);
+        }
+      });
+    });
+  },
   selectServer() {
     prompt.get({
       properties: {
@@ -81,18 +101,19 @@ const prompts = {
       }
       const guild = bot.guilds.get(result.guildID);
       if (!guild) {
-        console.error(`${colors.error("[ERROR]")}: Server does not exist, or bot is not in the server.`);
+        console.error(`${colors.error("[ERROR]")} Server does not exist, or bot is not in the server.`);
         setImmediate(prompts.selectServer);
         return;
       }
-      setImmediate(prompts.selectLogging, guild);
+      selectedGuild = guild;
+      setImmediate(prompts.selectLogging);
     });
   },
-  selectLogging(guild) {
+  selectLogging() {
     prompt.get({
       properties: {
         option: {
-          description: colors.prompt("Logging options:\n  [1]: All messages\nChoose logging option")
+          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [8]: Change database\n  [9]: Change server\nChoose logging option`)
         }
       }
     }, (err, result) => {
@@ -100,44 +121,81 @@ const prompts = {
         if (err.message === "canceled") process.exit();
         throw err;
       }
-      switch (result.option) {
+      switch (result.option.trim()) {
         case "1": {
-          setImmediate(startLogging, guild);
+          setImmediate(startLogging);
+          break;
+        }
+        case "8": {
+          setImmediate(prompts.selectDatabase);
+          break;
+        }
+        case "9": {
+          setImmediate(prompts.selectServer);
           break;
         }
         default: {
-          console.error(`${colors.error("[ERROR]")}: Invalid option.`);
-          setImmediate(prompts.selectLogging, guild);
+          console.error(`${colors.error("[ERROR]")} Invalid option.`);
+          setImmediate(prompts.selectLogging);
         }
       }
     });
   }
 };
 
-async function startLogging(guild) {
-  console.log(`${colors.info("[INFO]")}: Starting to log the server "${guild.name}"...`);
-  const textChannels = guild.channels.array().filter(c => c.type === "text" && c.permissionsFor(c.guild.member(bot.user)).has("VIEW_CHANNEL"));
+async function startLogging() {
+  console.log(`${colors.info("[INFO]")} Starting to log the server "${selectedGuild.name}"...`);
+  const textChannels = selectedGuild.channels.array().filter(c => c.type === "text" && c.permissionsFor(c.guild.member(bot.user)).has("VIEW_CHANNEL"));
   for (let i = 0; i < textChannels.length; i++) {
     await logChannel(textChannels[i]);
   }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging the server "${selectedGuild.name}".`);
 }
 
 async function logChannel(channel) {
-  console.log(`${colors.info("[INFO]")}: Starting to log the channel #${channel.name}...`);
-  // console.log(`${colors.info("[INFO]")}: Messages logged: 0`);
+  console.log(`${colors.info("[INFO]")} Attempting to fetch stored data for #${channel.name}...`);
+  let nextID = "0";
+  try {
+    const storedMessages = await Message.find(
+      {
+        channelID: channel.id
+      },
+      null,
+      {
+        sort: {
+          timestamp: -1,
+          id: -1
+        }
+      }
+    );
+    if (storedMessages.length > 0) {
+      nextID = storedMessages[0].id;
+      console.log(`${colors.success("[SUCCESS]")} Stored data loaded for #${channel.name}.`);
+      console.log(`${colors.info("[INFO]")} Logging will start with message ID ${nextID}.`);
+    } else {
+      console.log(`${colors.info("[INFO]")} No stored data found for #${channel.name}.`);
+    }
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} Failed to load stored data for #${channel.name}.`);
+  }
+  console.log(`${colors.info("[INFO]")} Starting to log the channel #${channel.name}...`);
+  process.stdout.write(`${colors.info("[INFO]")} Messages logged: 0`);
   const counter = {
     numberLogged: 0
   };
-  let nextID = "0";
   do {
     try {
       nextID = await logNextMessages(channel, nextID, counter);
-      // readline.cursorTo(process.stdout, 26);
-      // process.stdout.write(counter.numberLogged);
+      readline.cursorTo(process.stdout, 24);
+      readline.clearScreenDown();
+      process.stdout.write(counter.numberLogged.toString());
     } catch (e) {
-      console.error(`${colors.error("[ERROR]")}: ${e}.`);
+      console.error(`${colors.error("[ERROR]")} ${e}.`);
     }
   } while (nextID !== null);
+  console.log();
+  console.log(`${colors.success("[SUCCESS]")} Finished logging the channel #${channel.name}.`);
+  setImmediate(prompt.selectLogging);
 }
 
 async function logNextMessages(channel, id, counter) {
@@ -241,7 +299,10 @@ function convertMessageToObject(msg) {
   };
 }
 
+console.log(`${colors.info("[INFO]")} Starting Discord bot...`);
+bot.login(config.token);
+
 bot.on("ready", () => {
-  console.log(`${colors.success("[SUCCESS]")}: Discord bot started.`);
-  prompts.selectServer();
+  console.log(`${colors.success("[SUCCESS]")} Discord bot started.`);
+  prompts.selectDatabase();
 });

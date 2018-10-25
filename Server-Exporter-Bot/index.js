@@ -286,7 +286,7 @@ function convertMessageToObject(msg) {
       return embed;
     }),
     reactions: msg.reactions.map(r => ({
-      users: r.users.map(u => u.id),
+      count: r.count,
       emoji: {
         id: r.emoji.id,
         name: r.emoji.name,

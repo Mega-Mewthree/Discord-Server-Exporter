@@ -1,3 +1,7 @@
 {
-  "token": "YOUR_SUPER_SECRET_BOT_TOKEN"
+  "token": "YOUR_SUPER_SECRET_BOT_TOKEN",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 27017
+  }
 }

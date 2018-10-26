@@ -1,10 +1,5 @@
 const colors = require("colors/safe");
-const Discord = require("discord.js");
-const mongoose = require("mongoose");
 const prompt = require("prompt");
-const readline = require("readline");
-
-const config = require("../config.json");
 
 process.noDeprecation = true;
 
@@ -18,6 +13,19 @@ colors.setTheme({
   error: "red",
   success: "green"
 });
+
+prompt.message = "";
+
+prompt.start();
+
+console.info(`${colors.info("[INFO]")} Loading...`);
+
+const Discord = require("discord.js");
+const mongoose = require("mongoose");
+const fetch = require("node-fetch");
+const readline = require("readline");
+
+const config = require("../config.json");
 
 const messageSchema = new mongoose.Schema({
   id: {
@@ -37,18 +45,44 @@ const roleSchema = new mongoose.Schema({
     }
   }
 }, {strict: false});
+const channelSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    index: {
+      unique: true,
+      dropDups: true
+    }
+  }
+}, {strict: false});
+const guildSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    index: {
+      unique: true,
+      dropDups: true
+    }
+  }
+}, {strict: false});
+const emojiSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    index: {
+      unique: true,
+      dropDups: true
+    }
+  }
+}, {strict: false});
 let Message = mongoose.model("messages", messageSchema);
 let Role = mongoose.model("roles", roleSchema);
+let Channel = mongoose.model("channels", channelSchema);
+let Guild = mongoose.model("guild", guildSchema);
+let Emoji = mongoose.model("emojis", emojiSchema);
 
 const bot = new Discord.Client({
   disabledEvents: [
     "TYPING_START"
   ]
 });
-
-prompt.message = "";
-
-prompt.start();
 
 let db = null;
 let selectedGuild = null;
@@ -71,6 +105,9 @@ const prompts = {
         db = db.useDb(result.databaseName);
         Message = db.model("messages", messageSchema);
         Role = db.model("roles", roleSchema);
+        Channel = db.model("channels", channelSchema);
+        Guild = db.model("guild", guildSchema);
+        Emoji = db.model("emojis", emojiSchema);
         console.log(`${colors.success("[SUCCESS]")} Connected to database.`);
         if (!selectedGuild) {
           setImmediate(prompts.selectServer);
@@ -79,13 +116,15 @@ const prompts = {
         }
         return;
       } else {
-        mongoose.connect(`mongodb://localhost/${result.databaseName}`, {
+        mongoose.connect(`mongodb://${config.database.host}:${config.database.port}/${result.databaseName}`, {
           useNewUrlParser: true
         });
         db = mongoose.connection;
       }
       db.once("error", err => {
         console.error(`${colors.error("[ERROR]")} Database connection error.`);
+        console.error(`${colors.error("[ERROR]")} Is MongoDB installed on your system? Is it running?`);
+        console.error(`${colors.error("[ERROR]")} Is the host and port in your config.json correct?`);
         process.exit();
       });
       db.once("connected", () => {
@@ -99,46 +138,76 @@ const prompts = {
     });
   },
   selectServer() {
-    prompt.get({
-      properties: {
-        guildID: {
-          description: colors.prompt("Server ID of server to export")
+    console.log(`${colors.info("[INFO]")} Checking for stored data...`);
+    Guild.findOne({}).then(g => {
+      if (g && g.id) {
+        const guild = bot.guilds.get(g.id);
+        if (!guild) {
+          console.error(`${colors.error("[ERROR]")} Server does not exist anymore, or bot is not in the server.`);
+          console.error(`${colors.error("[ERROR]")} Use a different database for a different server.`);
+          setImmediate(prompts.selectServer);
         }
+        console.info(`${colors.info("[INFO]")} Using stored server. Use a different database for a different server.`);
+        selectedGuild = guild;
+        setImmediate(prompts.selectLogging);
+      } else {
+        prompt.get({
+          properties: {
+            guildID: {
+              description: colors.prompt("Server ID of server to export")
+            }
+          }
+        }, (err, result) => {
+          if (err) {
+            if (err.message === "canceled") process.exit();
+            throw err;
+          }
+          const guild = bot.guilds.get(result.guildID);
+          if (!guild) {
+            console.error(`${colors.error("[ERROR]")} Server does not exist, or bot is not in the server.`);
+            setImmediate(prompts.selectServer);
+            return;
+          }
+          guild._isNewForLogger = true;
+          selectedGuild = guild;
+          setImmediate(prompts.selectLogging);
+        });
       }
-    }, (err, result) => {
-      if (err) {
-        if (err.message === "canceled") process.exit();
-        throw err;
-      }
-      const guild = bot.guilds.get(result.guildID);
-      if (!guild) {
-        console.error(`${colors.error("[ERROR]")} Server does not exist, or bot is not in the server.`);
-        setImmediate(prompts.selectServer);
-        return;
-      }
-      selectedGuild = guild;
-      setImmediate(prompts.selectLogging);
+    }).catch(() => {
+      console.error(`${colors.error("[ERROR]")} Database error.`);
+      process.exit();
     });
   },
   selectLogging() {
     prompt.get({
       properties: {
         option: {
-          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [2]: Log all roles in server\n  [8]: Change database\n  [9]: Change server\n  [0]: Exit\nChoose an option`)
+          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [2]: Log all roles in server\n  [3]: Log all channels in server\n  [5]: Log server settings\n  [8]: Change database\n  [9]: Change server\n  [0]: Exit\nChoose an option`)
         }
       }
-    }, (err, result) => {
+    }, async (err, result) => {
       if (err) {
         if (err.message === "canceled") process.exit();
         throw err;
       }
       switch (result.option.trim()) {
         case "1": {
+          await checkForNewGuild();
           setImmediate(startLogging);
           break;
         }
         case "2": {
+          await checkForNewGuild();
           setImmediate(logRoles);
+          break;
+        }
+        case "3": {
+          await checkForNewGuild();
+          setImmediate(logChannels);
+          break;
+        }
+        case "5": {
+          setImmediate(logServerSettings);
           break;
         }
         case "8": {
@@ -162,17 +231,31 @@ const prompts = {
   }
 };
 
+async function checkForNewGuild() {
+  if (selectedGuild._isNewForLogger) {
+    console.log(`${colors.info("[INFO]")} First run for this database, logging server settings...`);
+    try {
+      await logServerSettings(false);
+      selectedGuild._isNewForLogger = false;
+    } catch (e) {
+      console.error(`${colors.error("[ERROR]")} An error occurred while saving server settings.`);
+      process.exit();
+    }
+    console.log(`${colors.success("[SUCCESS]")} Initial server settings logging complete.`);
+  }
+}
+
 async function startLogging() {
   console.log(`${colors.info("[INFO]")} Starting to log the server "${selectedGuild.name}"...`);
   const textChannels = selectedGuild.channels.array().filter(c => c.type === "text" && c.permissionsFor(c.guild.member(bot.user)).has("VIEW_CHANNEL"));
   for (let i = 0; i < textChannels.length; i++) {
-    await logChannel(textChannels[i]);
+    await logChannelMessages(textChannels[i]);
   }
   console.log(`${colors.success("[SUCCESS]")} Finished logging the server "${selectedGuild.name}".`);
   setImmediate(prompts.selectLogging);
 }
 
-async function logChannel(channel) {
+async function logChannelMessages(channel) {
   console.log(`${colors.info("[INFO]")} Attempting to fetch stored data for #${channel.name}...`);
   let nextID = "0";
   try {
@@ -258,6 +341,54 @@ async function logRoles() {
   }
   console.log(`${colors.success("[SUCCESS]")} Finished logging ${roles.length} roles for server "${selectedGuild.name}".`);
   setImmediate(prompts.selectLogging);
+}
+
+async function logChannels() {
+  console.log(`${colors.info("[INFO]")} Starting to log channels for server "${selectedGuild.name}"...`);
+  const channels = selectedGuild.channels.array();
+  const bulk = Channel.collection.initializeUnorderedBulkOp();
+  for (let i = 0, len = channels.length, channel; i < len; i++) {
+    channel = convertChannelToObject(channels[i]);
+    bulk.find({
+      id: channel.id
+    }).upsert().updateOne({
+      $set: channel
+    });
+  }
+  console.log(`${colors.info("[INFO]")} Writing channels for server "${selectedGuild.name}"...`);
+  try {
+    await new Promise((resolve, reject) => {
+      bulk.execute((err, result) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging ${channels.length} channels for server "${selectedGuild.name}".`);
+  setImmediate(prompts.selectLogging);
+}
+
+async function logServerSettings(returnToMenuAfterDone = true) {
+  console.log(`${colors.info("[INFO]")} Starting to log settings for server "${selectedGuild.name}"...`);
+  try {
+    await Guild.findOneAndUpdate(
+      {},
+      {
+        $set: convertGuildToObject(selectedGuild)
+      },
+      {
+        upsert: true
+      }
+    )
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging settings for server "${selectedGuild.name}".`);
+  if (returnToMenuAfterDone) setImmediate(prompts.selectLogging);
 }
 
 function convertMessageToObject(msg) {
@@ -359,8 +490,51 @@ function convertRoleToObject(role) {
   };
 }
 
+function convertChannelToObject(channel) {
+  return {
+    id: channel.id,
+    name: channel.name,
+    topic: channel.topic,
+    type: channel.type,
+    position: channel.position,
+    nsfw: channel.nsfw,
+    bitrate: channel.bitrate,
+    userLimit: channel.userLimit,
+    parentID: channel.parent ? channel.parent.id : undefined,
+    permissionOverwrites: channel.permissionOverwrites.map(p => ({
+      id: p.id,
+      type: p.type,
+      allow: p.allowed.bitfield,
+      deny: p.denied.bitfield
+    }))
+  };
+}
+
+function convertGuildToObject(guild) {
+  return {
+    id: guild.id,
+    name: guild.name,
+    nameAcronym: guild.nameAcronym,
+    icon: guild.icon,
+    splash: guild.splash,
+    ownerID: guild.ownerID,
+    region: guild.region,
+    afkChannelID: guild.afkChannelID,
+    afkTimeout: guild.afkTimeout,
+    verificationLevel: guild.verificationLevel,
+    defaultMessageNotifications: guild.defaultMessageNotifications,
+    explicitContentFilter: guild.explicitContentFilter,
+    mfaLevel: guild.mfaLevel,
+    systemChannelID: guild.systemChannelID
+  };
+}
+
 console.log(`${colors.info("[INFO]")} Starting Discord bot...`);
-bot.login(config.token);
+bot.login(config.token).catch(() => {
+  console.error(`${colors.error("[ERROR]")} Bot failed to connect.`);
+  console.error(`${colors.error("[ERROR]")} Does your config.json have the correct Discord bot token?`);
+  console.error(`${colors.error("[ERROR]")} Is Discord's API having issues?`);
+});
 
 bot.on("ready", () => {
   console.log(`${colors.success("[SUCCESS]")} Discord bot started.`);

@@ -62,3 +62,7 @@ typings/
 
 # Config file
 config.json
+
+# Exported Resources
+Exported_Resources/*
+!Exported_Resources/info.txt

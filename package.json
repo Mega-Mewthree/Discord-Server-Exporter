@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "run": "node ./Server-Exporter-Bot/index.js"
+    "logger": "node ./Server-Exporter-Bot/index.js"
   },
   "repository": {
     "type": "git",
@@ -20,8 +20,9 @@
   "dependencies": {
     "colors": "^1.3.2",
     "discord.js": "^11.4.2",
+    "download-file": "^0.1.5",
+    "fs-extra": "^7.0.0",
     "mongoose": "^5.3.4",
-    "node-fetch": "^2.2.0",
     "prompt": "^1.0.0",
     "uws": "^10.148.1"
   }

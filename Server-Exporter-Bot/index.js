@@ -20,10 +20,15 @@ prompt.start();
 
 console.info(`${colors.info("[INFO]")} Loading...`);
 
+const crypto = require("crypto");
 const Discord = require("discord.js");
 const mongoose = require("mongoose");
-const fetch = require("node-fetch");
+const fs = require("fs-extra");
+const path = require("path");
 const readline = require("readline");
+const util = require("util");
+
+const download = util.promisify(require("download-file"));
 
 const config = require("../config.json");
 
@@ -72,11 +77,21 @@ const emojiSchema = new mongoose.Schema({
     }
   }
 }, {strict: false});
+const userSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    index: {
+      unique: true,
+      dropDups: true
+    }
+  }
+}, {strict: false});
 let Message = mongoose.model("messages", messageSchema);
 let Role = mongoose.model("roles", roleSchema);
 let Channel = mongoose.model("channels", channelSchema);
-let Guild = mongoose.model("guild", guildSchema);
+let Guild = mongoose.model("guilds", guildSchema);
 let Emoji = mongoose.model("emojis", emojiSchema);
+let User = mongoose.model("users", userSchema);
 
 const bot = new Discord.Client({
   disabledEvents: [
@@ -86,6 +101,12 @@ const bot = new Discord.Client({
 
 let db = null;
 let selectedGuild = null;
+
+function wait(ms) {
+  return new Promise((resolve, reject) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 const prompts = {
   selectDatabase() {
@@ -106,8 +127,9 @@ const prompts = {
         Message = db.model("messages", messageSchema);
         Role = db.model("roles", roleSchema);
         Channel = db.model("channels", channelSchema);
-        Guild = db.model("guild", guildSchema);
+        Guild = db.model("guilds", guildSchema);
         Emoji = db.model("emojis", emojiSchema);
+        User = db.model("users", userSchema);
         console.log(`${colors.success("[SUCCESS]")} Connected to database.`);
         if (!selectedGuild) {
           setImmediate(prompts.selectServer);
@@ -179,10 +201,11 @@ const prompts = {
     });
   },
   selectLogging() {
+    debugger;
     prompt.get({
       properties: {
         option: {
-          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [2]: Log all roles in server\n  [3]: Log all channels in server\n  [5]: Log server settings\n  [8]: Change database\n  [9]: Change server\n  [0]: Exit\nChoose an option`)
+          description: colors.prompt(`Selected Database: ${colors.white(db.name)}\nSelected Server: ${colors.white(selectedGuild.name)}\nOptions:\n  [1]: Log all messages in server\n  [2]: Log all roles in server\n  [3]: Log all channels in server\n  [4]: Log all emojis in server\n  [5]: Log all users associated with server\n  [6]: Log server settings\n  [7]: Download all attachments\n  [8]: Change database\n  [9]: Change server\n  [0]: Exit\nChoose an option`)
         }
       }
     }, async (err, result) => {
@@ -206,8 +229,23 @@ const prompts = {
           setImmediate(logChannels);
           break;
         }
+        case "4": {
+          await checkForNewGuild();
+          setImmediate(logEmojis);
+          break;
+        }
         case "5": {
+          await checkForNewGuild();
+          setImmediate(logUsers);
+          break;
+        }
+        case "6": {
           setImmediate(logServerSettings);
+          break;
+        }
+        case "7": {
+          await checkForNewGuild();
+          setImmediate(logAttachments);
           break;
         }
         case "8": {
@@ -251,7 +289,7 @@ async function startLogging() {
   for (let i = 0; i < textChannels.length; i++) {
     await logChannelMessages(textChannels[i]);
   }
-  console.log(`${colors.success("[SUCCESS]")} Finished logging the server "${selectedGuild.name}".`);
+  console.log(`${colors.success("[SUCCESS]")} Finished logging messages.`);
   setImmediate(prompts.selectLogging);
 }
 
@@ -316,7 +354,7 @@ async function logNextMessages(channel, id, counter) {
 }
 
 async function logRoles() {
-  console.log(`${colors.info("[INFO]")} Starting to log roles for server "${selectedGuild.name}"...`);
+  console.log(`${colors.info("[INFO]")} Starting to log roles...`);
   const roles = selectedGuild.roles.array();
   const bulk = Role.collection.initializeUnorderedBulkOp();
   for (let i = 0, len = roles.length, role; i < len; i++) {
@@ -327,7 +365,7 @@ async function logRoles() {
       $set: role
     });
   }
-  console.log(`${colors.info("[INFO]")} Writing roles for server "${selectedGuild.name}"...`);
+  console.log(`${colors.info("[INFO]")} Writing roles...`);
   try {
     await new Promise((resolve, reject) => {
       bulk.execute((err, result) => {
@@ -339,12 +377,12 @@ async function logRoles() {
     console.error(`${colors.error("[ERROR]")} ${e}`);
     process.exit();
   }
-  console.log(`${colors.success("[SUCCESS]")} Finished logging ${roles.length} roles for server "${selectedGuild.name}".`);
+  console.log(`${colors.success("[SUCCESS]")} Finished logging ${roles.length} roles.`);
   setImmediate(prompts.selectLogging);
 }
 
 async function logChannels() {
-  console.log(`${colors.info("[INFO]")} Starting to log channels for server "${selectedGuild.name}"...`);
+  console.log(`${colors.info("[INFO]")} Starting to log channels...`);
   const channels = selectedGuild.channels.array();
   const bulk = Channel.collection.initializeUnorderedBulkOp();
   for (let i = 0, len = channels.length, channel; i < len; i++) {
@@ -355,7 +393,7 @@ async function logChannels() {
       $set: channel
     });
   }
-  console.log(`${colors.info("[INFO]")} Writing channels for server "${selectedGuild.name}"...`);
+  console.log(`${colors.info("[INFO]")} Writing channels...`);
   try {
     await new Promise((resolve, reject) => {
       bulk.execute((err, result) => {
@@ -367,12 +405,276 @@ async function logChannels() {
     console.error(`${colors.error("[ERROR]")} ${e}`);
     process.exit();
   }
-  console.log(`${colors.success("[SUCCESS]")} Finished logging ${channels.length} channels for server "${selectedGuild.name}".`);
+  console.log(`${colors.success("[SUCCESS]")} Finished logging ${channels.length} channels.`);
+  setImmediate(prompts.selectLogging);
+}
+
+async function logEmojis() {
+  console.log(`${colors.info("[INFO]")} Starting to log emojis...`);
+  const emojis = selectedGuild.emojis.array();
+  const bulk = Emoji.collection.initializeUnorderedBulkOp();
+  for (let i = 0, len = emojis.length, emoji; i < len; i++) {
+    emoji = convertEmojiToObject(emojis[i]);
+    bulk.find({
+      id: emoji.id
+    }).upsert().updateOne({
+      $set: emoji
+    });
+  }
+  console.log(`${colors.info("[INFO]")} Writing emojis...`);
+  try {
+    await new Promise((resolve, reject) => {
+      bulk.execute((err, result) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  let downloadedCount = 0;
+  console.log(`${colors.info("[INFO]")} Downloading emojis...`);
+  process.stdout.write(`${colors.info("[INFO]")} Emojis downloaded: 0/${emojis.length}`);
+  try {
+    await fs.ensureDir(path.join(__dirname, "../Exported_Resources/"));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/`));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/emojis/`));
+    const regex = /^\d+/;
+    const existingEmojis = (await fs.readdir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/emojis/`))).map(f => (f.match(regex) || [])[0]);
+    for (let i = 0, len = emojis.length, emoji, alreadyDownloaded; i < len; i++) {
+      emoji = emojis[i];
+      alreadyDownloaded = existingEmojis.includes(emoji.id);
+      if (!alreadyDownloaded) {
+        try {
+          await download(`https://cdn.discordapp.com/emojis/${emoji.id}.png`, {
+            directory: path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/emojis/`),
+            filename: `${emoji.id}.png`
+          });
+        } catch (e) {
+
+        }
+      }
+      readline.cursorTo(process.stdout, 26);
+      readline.clearScreenDown();
+      process.stdout.write(`${++downloadedCount}/${emojis.length}`);
+      if (!alreadyDownloaded) await wait(250);
+    }
+    console.log();
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging and downloading ${emojis.length} emojis.`);
+  setImmediate(prompts.selectLogging);
+}
+
+async function logUsers() {
+  console.log(`${colors.info("[INFO]")} Fetching members...`);
+  try {
+    await selectedGuild.fetchMembers();
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  console.log(`${colors.info("[INFO]")} Starting to log members...`);
+  const users = selectedGuild.members.map(u => u.user);
+  const userIDs = users.map(u => u.id);
+  const allUsers = [];
+  const bulk = User.collection.initializeUnorderedBulkOp();
+  for (let i = 0, len = users.length, user; i < len; i++) {
+    user = convertUserToObject(users[i]);
+    allUsers.push(user);
+    if (user.avatar === null && user.username.match(/Deleted User [a-z0-9]{8}/)) {
+      bulk.find({
+        id: user.id
+      }).upsert().updateOne({
+        $setOnInsert: user
+      });
+    } else {
+      bulk.find({
+        id: user.id
+      }).upsert().updateOne({
+        $set: user
+      });
+    }
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging members.`);
+  console.log(`${colors.info("[INFO]")} Fetching users from message collection...`);
+  try {
+    const authors = await Message.distinct("author");
+    let len = authors.length;
+    while (len--) {
+      if (userIDs.includes(authors[len])) authors.splice(len, 1);
+    }
+    console.log(`${colors.info("[INFO]")} Starting to log users from message collection...`);
+    let counter = 0;
+    process.stdout.write(`${colors.info("[INFO]")} Users logged: 0/${authors.length}`);
+    for (let i = 0, len = authors.length, user; i < len; i++) {
+      try {
+        user = convertUserToObject(await bot.fetchUser(authors[i]));
+        allUsers.push(user);
+        if (user.avatar === null && user.username.match(/Deleted User [a-z0-9]{8}/)) {
+          bulk.find({
+            id: user.id
+          }).upsert().updateOne({
+            $setOnInsert: user
+          });
+        } else {
+          bulk.find({
+            id: user.id
+          }).upsert().updateOne({
+            $set: user
+          });
+        }
+        readline.cursorTo(process.stdout, 21);
+        readline.clearScreenDown();
+        process.stdout.write(`${++counter}/${authors.length}`);
+      } catch (e) {
+
+      }
+    }
+    console.log();
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      bulk.execute((err, result) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  let downloadedCount = 0;
+  console.log(`${colors.info("[INFO]")} Downloading avatars...`);
+  try {
+    await fs.ensureDir(path.join(__dirname, "../Exported_Resources/"));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/`));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/avatars/`));
+    const regex = /^\d+_[a-f0-9_]+/;
+    const existingAvatars = (await fs.readdir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/avatars/`))).map(f => (f.match(regex) || [])[0]);
+    console.log(`${colors.info("[INFO]")} Downloading default avatars...`);
+    for (let i = 0, alreadyDownloaded; i < 5; i++) {
+      alreadyDownloaded = existingAvatars.includes(`0_${i}`);
+      if (!alreadyDownloaded) {
+        try {
+          await download(`https://cdn.discordapp.com/embed/avatars/${i}.png`, {
+            directory: path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/avatars/`),
+            filename: `0_${i}.png`
+          });
+        } catch (e) {
+
+        }
+      }
+    }
+    console.log(`${colors.success("[SUCCESS]")} Finished downloading default avatars.`);
+    console.log(`${colors.info("[INFO]")} Downloading user avatars...`);
+    process.stdout.write(`${colors.info("[INFO]")} Avatars downloaded: 0/${allUsers.length}`);
+    for (let i = 0, len = allUsers.length, user, alreadyDownloaded; i < len; i++) {
+      user = allUsers[i];
+      if (user.avatar) {
+        alreadyDownloaded = existingAvatars.includes(`${user.id}_${user.avatar}`);
+        if (!alreadyDownloaded) {
+          try {
+            await download(`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`, {
+              directory: path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/avatars/`),
+              filename: `${user.id}_${user.avatar}.png`
+            });
+          } catch (e) {
+
+          }
+        }
+      } else {
+        alreadyDownloaded = true;
+      }
+      readline.cursorTo(process.stdout, 27);
+      readline.clearScreenDown();
+      process.stdout.write(`${++downloadedCount}/${allUsers.length}`);
+      if (!alreadyDownloaded) await wait(250);
+    }
+    console.log();
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished logging and downloading ${allUsers.length} users.`);
+  setImmediate(prompts.selectLogging);
+}
+
+async function logAttachments() {
+  console.log(`${colors.info("[INFO]")} Fetching attachments from messages...`);
+  let attachments;
+  try {
+    attachments = (await Message.distinct("attachments.proxyURL")).concat(
+      await Message.distinct("embeds.image.proxyURL"),
+      await Message.distinct("embeds.thumbnail.proxyURL"),
+      await Message.distinct("embeds.footer.proxyIconURL"),
+      await Message.distinct("embeds.author.iconURL")
+    );
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+    process.exit();
+  }
+  let downloadedCount = 0;
+  console.log(`${colors.info("[INFO]")} Downloading attachments...`);
+  try {
+    await fs.ensureDir(path.join(__dirname, "../Exported_Resources/"));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/`));
+    await fs.ensureDir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/attachments/`));
+    const regex = /^[a-f0-9]+/;
+    const extensionRegex = /\.[A-z0-9]+$/;
+    const alternateRegex = /\/(\d+)\/(\d+)\/([^?]+)/;
+    const existingAttachments = (await fs.readdir(path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/attachments/`))).map(f => (f.match(regex) || [])[0]);
+    process.stdout.write(`${colors.info("[INFO]")} Attachments downloaded: 0/${attachments.length}`);
+    for (let i = 0, len = attachments.length, attachment, hash, alreadyDownloaded; i < len; i++) {
+      attachment = attachments[i];
+      hash = crypto.createHash("sha512");
+      hash.update(attachment);
+      hash = hash.digest("hex").substr(0, 32);
+      alreadyDownloaded = existingAttachments.includes(hash);
+      if (!alreadyDownloaded) {
+        const extension = (attachment.match(extensionRegex) || [])[0];
+        try {
+          await download(attachment, {
+            directory: path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/attachments/`),
+            filename: `${hash}${extension || ""}`
+          });
+          existingAttachments.push(hash);
+        } catch (e) {
+          if (e === 415) {
+            const matches = attachment.match(alternateRegex);
+            if (matches && matches[1] && matches[2] && matches[3]) {
+              try {
+                await download(`https://cdn.discordapp.com/attachments/${matches[1]}/${matches[2]}/${matches[3]}`, {
+                  directory: path.join(__dirname, `../Exported_Resources/${selectedGuild.id}/attachments/`),
+                  filename: `${hash}${extension || ""}`
+                });
+                existingAttachments.push(hash);
+              } catch (e) {
+
+              }
+            }
+          }
+        }
+      }
+      readline.cursorTo(process.stdout, 31);
+      readline.clearScreenDown();
+      process.stdout.write(`${++downloadedCount}/${attachments.length}`);
+      if (!alreadyDownloaded) await wait(250);
+    }
+    console.log();
+  } catch (e) {
+    console.error(`${colors.error("[ERROR]")} ${e}`);
+  }
+  console.log(`${colors.success("[SUCCESS]")} Finished downloading ${attachments.length} attachments.`);
   setImmediate(prompts.selectLogging);
 }
 
 async function logServerSettings(returnToMenuAfterDone = true) {
-  console.log(`${colors.info("[INFO]")} Starting to log settings for server "${selectedGuild.name}"...`);
+  console.log(`${colors.info("[INFO]")} Starting to log settings...`);
   try {
     await Guild.findOneAndUpdate(
       {},
@@ -387,7 +689,7 @@ async function logServerSettings(returnToMenuAfterDone = true) {
     console.error(`${colors.error("[ERROR]")} ${e}`);
     process.exit();
   }
-  console.log(`${colors.success("[SUCCESS]")} Finished logging settings for server "${selectedGuild.name}".`);
+  console.log(`${colors.success("[SUCCESS]")} Finished logging settings.`);
   if (returnToMenuAfterDone) setImmediate(prompts.selectLogging);
 }
 
@@ -461,6 +763,13 @@ function convertMessageToObject(msg) {
           url: e.video.url
         };
       }
+      if (e.author) {
+        embed.author = {
+          name: e.author.name,
+          url: e.author.url,
+          iconURL: e.author.iconURL
+        };
+      }
       return embed;
     }),
     reactions: msg.reactions.map(r => ({
@@ -529,14 +838,32 @@ function convertGuildToObject(guild) {
   };
 }
 
+function convertEmojiToObject(emoji) {
+  return {
+    id: emoji.id,
+    name: emoji.name,
+    managed: emoji.managed,
+    animated: emoji.animated,
+    roles: emoji.roles.map(r => r.id)
+  };
+}
+
+function convertUserToObject(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    discriminator: user.discriminator,
+    bot: user.bot,
+    avatar: user.avatarURL ? user.avatarURL.match(/\/avatars\/\d+\/([a-f0-9_]+)/)[1] : null
+  };
+}
+
 console.log(`${colors.info("[INFO]")} Starting Discord bot...`);
-bot.login(config.token).catch(() => {
+bot.login(config.token).then(() => {
+  console.log(`${colors.success("[SUCCESS]")} Discord bot started.`);
+  prompts.selectDatabase();
+}).catch(() => {
   console.error(`${colors.error("[ERROR]")} Bot failed to connect.`);
   console.error(`${colors.error("[ERROR]")} Does your config.json have the correct Discord bot token?`);
   console.error(`${colors.error("[ERROR]")} Is Discord's API having issues?`);
-});
-
-bot.on("ready", () => {
-  console.log(`${colors.success("[SUCCESS]")} Discord bot started.`);
-  prompts.selectDatabase();
 });

@@ -1,0 +1,1 @@
+This folder holds all downloaded emojis and attachments.

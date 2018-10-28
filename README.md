@@ -9,6 +9,8 @@ Install [Node.JS](https://nodejs.org/en/) and [MongoDB](https://www.mongodb.com/
 
 Run `npm install` in the extracted folder.
 
+Create a Discord bot and add it to your server.
+
 Rename the `config.example.json` file to `config.json` and put your Discord bot token into it where indicated.
 
 ## Use

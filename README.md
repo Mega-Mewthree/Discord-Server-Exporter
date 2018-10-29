@@ -1,4 +1,7 @@
 # Discord Server Exporter
+
+[![GitHub package version](https://img.shields.io/github/package-json/v/Mega-Mewthree/Discord-Server-Exporter.svg?label=github&style=popout)](https://github.com/Mega-Mewthree/Discord-Server-Exporter)
+
 Exports message history and more from Discord servers.
 
 ## Installation

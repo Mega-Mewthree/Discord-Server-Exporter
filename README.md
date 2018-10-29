@@ -23,7 +23,9 @@ In a text editor, rename `config.example.json` to `config.json` and change the `
 
 ## Usage
 
-Run `npm run logger` to start the logger, and follow the prompts.
+Start the logger in the command prompt:
+
+    npm run logger
 
 Data for your server will be stored in your selected MongoDB database, and files will be stored in the `Exported_Resources` folder.
 
